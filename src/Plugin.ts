@@ -17,7 +17,7 @@ import { calcIndentLevels, getHeadings, isMarkdownFile, trivial, parseMarkdown }
 
 export default class StickyHeadingsPlugin extends Plugin {
   settings: ISetting;
-  fileResolveMap: Record<
+  fileResolveMap: Map<
     string,
     {
       resolve: boolean;
@@ -25,9 +25,9 @@ export default class StickyHeadingsPlugin extends Plugin {
       view: MarkdownView;
       container: HTMLElement;
     }
-  > = {};
+  > = new Map();
 
-  markdownCache: Record<string, string> = {};
+  markdownCache: Map<string, string> = new Map();
 
   detectPosition = debounce(
     (event: Event) => {
@@ -37,8 +37,8 @@ export default class StickyHeadingsPlugin extends Plugin {
       if (scroller) {
         const container = target?.closest('.view-content');
         if (container) {
-          const ids = Object.keys(this.fileResolveMap).filter(
-            id => this.fileResolveMap[id].container === container,
+          const ids = Array.from(this.fileResolveMap.keys()).filter(
+            id => this.fileResolveMap.get(id)?.container === container,
           );
           this.updateHeadings(ids);
         }
@@ -50,44 +50,50 @@ export default class StickyHeadingsPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+  
     this.registerEvent(
       this.app.workspace.on('file-open', file => {
         if (file && isMarkdownFile(file)) {
-          const activeView
-            = this.app.workspace.getActiveViewOfType(MarkdownView);
+          const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
           const id = activeView?.leaf.id;
+  
           if (id) {
-            if (!(id in this.fileResolveMap)) {
+            if (!this.fileResolveMap.has(id)) {
               activeView.onResize = this.makeResize(id);
             }
-            this.fileResolveMap[id] = {
+
+            this.fileResolveMap.set(id, {
               resolve: true,
               file,
               container: activeView.contentEl,
               view: activeView,
-            };
+            });
+
             this.checkFileResolveMap();
             this.updateHeadings([id]);
           }
         }
       }),
     );
+  
     this.registerEvent(
       this.app.workspace.on('layout-change', () => {
         this.checkFileResolveMap();
-        this.updateHeadings(Object.keys(this.fileResolveMap));
+        this.updateHeadings(Array.from(this.fileResolveMap.keys()));
       }),
     );
+  
     this.registerEvent(
       this.app.workspace.on('window-open', workspaceWindow => {
         this.registerDomEvent(workspaceWindow.doc, 'scroll', this.detectPosition, true);
       }),
     );
+  
     this.registerEvent(
       this.app.workspace.on('editor-change', (editor, info) => {
         const { file } = info;
         if (file && isMarkdownFile(file)) {
-          Object.values(this.fileResolveMap).forEach(item => {
+          this.fileResolveMap.forEach(item => {
             if (item.file.path === file.path) {
               item.resolve = false;
             }
@@ -95,24 +101,24 @@ export default class StickyHeadingsPlugin extends Plugin {
         }
       }),
     );
+ 
     this.registerEvent(
       this.app.metadataCache.on('resolve', file => {
         if (isMarkdownFile(file)) {
           const ids: string[] = [];
-          Object.keys(this.fileResolveMap).forEach(id => {
-            const item = this.fileResolveMap[id];
+          this.fileResolveMap.forEach((item, id) => {
             if (item.file.path === file.path && !item.resolve) {
               item.resolve = true;
               ids.push(id);
             }
           });
           if (ids.length > 0) {
-            this.checkFileResolveMap();
             this.updateHeadings(ids);
           }
         }
       }),
     );
+  
     this.registerDomEvent(document, 'scroll', this.detectPosition, true);
     this.addSettingTab(new StickyHeadingsSetting(this.app, this));
   }
@@ -123,24 +129,24 @@ export default class StickyHeadingsPlugin extends Plugin {
     this.app.workspace.iterateAllLeaves(leaf => {
       if (leaf.id && leaf.view instanceof MarkdownView) {
         validIds.add(leaf.id);
-        if (!this.fileResolveMap.hasOwnProperty(leaf.id)) {
+        if (!this.fileResolveMap.has(leaf.id)) {
           const file = leaf.view.getFile();
           if (file) {
-            this.fileResolveMap[leaf.id] = {
+            this.fileResolveMap.set(leaf.id, {
               resolve: true,
               file,
               container: leaf.view.contentEl,
               view: leaf.view,
-            };
+            });
           }
         }
       }
     });
   
     // Remove entries from fileResolveMap that are no longer valid
-    for (const id in this.fileResolveMap) {
+    for (const id of this.fileResolveMap.keys()) {
       if (!validIds.has(id)) {
-        delete this.fileResolveMap[id];
+        this.fileResolveMap.delete(id);
       }
     }
   }
@@ -152,12 +158,12 @@ export default class StickyHeadingsPlugin extends Plugin {
   }
 
   rerenderAll() {
-    this.updateHeadings(Object.keys(this.fileResolveMap));
+    this.updateHeadings(Array.from(this.fileResolveMap.keys()));
   }
 
   updateHeadings(ids: string[]) {
     ids.forEach(id => {
-      const item = this.fileResolveMap[id];
+      const item = this.fileResolveMap.get(id);
       if (item) {
         const { file, view, container } = item;
         const headings = getHeadings(file, this.app);
@@ -182,14 +188,13 @@ export default class StickyHeadingsPlugin extends Plugin {
     }
     let headingContainer = container.querySelector(
       '.sticky-headings-container',
-    );
+    ) as HTMLElement | null;
     let lastHeight = 0;
     if (!headingContainer) {
       const headingRoot = createDiv({ cls: 'sticky-headings-root' });
       headingContainer = headingRoot.createDiv({ cls: 'sticky-headings-container' });
       container.prepend(headingRoot);
-    }
-    else {
+    } else {
       lastHeight = headingContainer.scrollHeight;
     }
     headingContainer.empty();
@@ -201,12 +206,11 @@ export default class StickyHeadingsPlugin extends Plugin {
       const cls = `sticky-headings-item sticky-headings-level-${heading.level}`;
       const cacheKey = heading.heading;
       let parsedText: string;
-      if (cacheKey in this.markdownCache) {
-        parsedText = this.markdownCache[cacheKey];
-      }
-      else {
+      if (this.markdownCache.has(cacheKey)) {
+        parsedText = this.markdownCache.get(cacheKey)!;
+      } else {
         parsedText = await parseMarkdown(heading.heading, this.app);
-        this.markdownCache[cacheKey] = parsedText;
+        this.markdownCache.set(cacheKey, parsedText);
       }
       const headingItem = createDiv({
         cls,
@@ -220,7 +224,6 @@ export default class StickyHeadingsPlugin extends Plugin {
       headingItem.addEventListener('click', () => {
         view.currentMode.applyScroll(heading.position.start.line);
         setTimeout(() => {
-          // wait for headings tree rendered
           view.currentMode.applyScroll(heading.position.start.line);
         }, 20);
       });
@@ -228,8 +231,8 @@ export default class StickyHeadingsPlugin extends Plugin {
     const newHeight = headingContainer.scrollHeight;
     const offset = newHeight - lastHeight;
     headingContainer.parentElement!.style.height = newHeight + 'px';
-    const contentElement = container.querySelectorAll<HTMLElement>('.markdown-source-view, .markdown-reading-view');
-    contentElement.forEach(item => {
+    const contentElements = container.querySelectorAll<HTMLElement>('.markdown-source-view, .markdown-reading-view');
+    contentElements.forEach(item => {
       const scroller = item.querySelector('.cm-scroller, .markdown-preview-view');
       item.style.paddingTop = newHeight + 'px';
       scroller?.scrollTo({ top: scroller.scrollTop + offset, behavior: 'instant' });
