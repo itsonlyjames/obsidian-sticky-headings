@@ -118,30 +118,31 @@ export default class StickyHeadingsPlugin extends Plugin {
   }
 
   checkFileResolveMap() {
-    const validIds: string[] = [];
-    this.app.workspace.iterateAllLeaves(
-      leaf => {
-        if (leaf.id && leaf.view instanceof MarkdownView) {
-          validIds.push(leaf.id);
-          if (!(leaf.id in this.fileResolveMap)) {
-            const file = leaf.view.getFile();
-            if (file) {
-              this.fileResolveMap[leaf.id] = {
-                resolve: true,
-                file,
-                container: leaf.view.contentEl,
-                view: leaf.view,
-              };
-            }
+    const validIds = new Set<string>();
+  
+    this.app.workspace.iterateAllLeaves(leaf => {
+      if (leaf.id && leaf.view instanceof MarkdownView) {
+        validIds.add(leaf.id);
+        if (!this.fileResolveMap.hasOwnProperty(leaf.id)) {
+          const file = leaf.view.getFile();
+          if (file) {
+            this.fileResolveMap[leaf.id] = {
+              resolve: true,
+              file,
+              container: leaf.view.contentEl,
+              view: leaf.view,
+            };
           }
         }
-      },
-    );
-    Object.keys(this.fileResolveMap).forEach(id => {
-      if (!validIds.includes(id)) {
-        delete this.fileResolveMap[id];
       }
     });
+  
+    // Remove entries from fileResolveMap that are no longer valid
+    for (const id in this.fileResolveMap) {
+      if (!validIds.has(id)) {
+        delete this.fileResolveMap[id];
+      }
+    }
   }
 
   makeResize(id: string) {
